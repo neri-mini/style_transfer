@@ -178,7 +178,6 @@ def transfer(vgg, content, style, patience=5, min_delta=1e-4):
         c, s, t, total = loss_calculate(feats, content_target, style_target, x)
         loss = total
         loss.backward()
-        closure.losses = (c.item(), s.item(), t.item())
         return loss
     with torch.no_grad():
         x0 = to_norm(gen)
@@ -186,15 +185,18 @@ def transfer(vgg, content, style, patience=5, min_delta=1e-4):
             get_features(vgg, x0), content_target, style_target, x0)
     record = [(0, c0.item(), s0.item(), t0.item(), total0.item())]
 
-    best_gen, best_total = None, float("inf")
-    prev_total, stale, done = 1e6, 0, 0
+    best_gen, best_total = gen.detach().clone(), total0.item()
+    prev_total, stale, done = best_total, 0, 0
 
     for step in range(1, NUM_ITERS + 1):
         optimizer.step(closure)
         with torch.no_grad():
             gen.clamp_(0, 1)
-        c, s, t = closure.losses
-        total = CONTENT_WEIGHT * c + STYLE_WEIGHT * s + TV_WEIGHT * t
+        with torch.no_grad():
+            x = to_norm(gen)
+            values = loss_calculate(
+                get_features(vgg, x), content_target, style_target, x)
+        c, s, t, total = (value.item() for value in values)
         record.append((step, c, s, t, total))
         done = step
 
@@ -234,10 +236,10 @@ def main():
             to_PIL_image(gen).save(os.path.join(output_set_strength, "result.png"))
             save_loss_csv(record, os.path.join(output_set_strength, "loss.csv"))
 
-            _, c_l, s_l, _, total = record[-1]
+            _, c_l, s_l, t_l, total = min(record, key=lambda row: row[-1])
             wc = CONTENT_WEIGHT * c_l
             ws = STYLE_WEIGHT * s_l
-            share = ws / (wc + ws + TV_WEIGHT * record[-1][3])
+            share = ws / (wc + ws + TV_WEIGHT * t_l)
             summary.append([set_name, f"{s:.2f}", f"{STYLE_WEIGHT:.4g}",
                             f"{c_l:.6f}", f"{s_l:.10f}", f"{wc:.6f}",
                             f"{ws:.6f}", f"{share:.4f}", f"{total:.6f}", done])

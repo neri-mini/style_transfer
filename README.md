@@ -122,8 +122,30 @@ python style_transfer_mask.py
 
 - 内容损失只在 mask 内算
 
-- 风格损失：特征图先乘 mask 再算 Gram，归一化用 mask 有效面积
+- 风格损失：用 mask 对 Gram 的空间统计作线性加权，归一化用 mask 有效面积
 
 - 输出时硬合成：`result = gen·mask + 原图·(1-mask)`
 
   
+
+## Correctness and regression tests
+
+- Loss CSV rows are evaluated on the accepted, clamped image after each LBFGS step.
+  Early stopping and best-image selection use those same values; the initial image
+  is also a candidate. Summary tables describe the saved best image.
+- Masked transfer composites the fixed content background before every feature
+  extraction and TV evaluation. Pixels where the input mask is zero receive no
+  optimization gradient. Background preservation is relative to the resized,
+  center-cropped content image used by the model.
+- Feature-resolution masks may contain fractional values after average pooling.
+  Masked Gram matrices use these values as linear area weights.
+
+Run from the repository root after installing the requirements:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The tests use a small CPU feature extractor, without downloading VGG weights.
+They cover all four transfer modes, rejected line-search trials, fixed-background
+gradients, soft-mask Gram weighting, and zero-iteration behavior.

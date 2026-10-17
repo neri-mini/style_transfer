@@ -113,7 +113,8 @@ def gram_matrix(tensor):
 def gram_matrix_masked(tensor, mask):
     """只统计 mask 内的 Gram 矩阵"""
     b, c, h, w = tensor.shape
-    t = (tensor * mask).view(b, c, h * w)
+    # sqrt ensures soft masks weight each outer product once, not twice.
+    t = (tensor * mask.sqrt()).view(b, c, h * w)
     area = mask.sum() * c + 1e-8
     return torch.bmm(t, t.transpose(1, 2)) / area
 
@@ -180,25 +181,27 @@ def transfer(vgg, content, style, mask, patience=5, min_delta=1e-4):
         with torch.no_grad():
             gen.clamp_(0, 1)
         optimizer.zero_grad()
-        x = to_norm(gen)
+        x = to_norm(gen * mask + content_pixel * (1 - mask))
         feats = get_features(vgg, x, track=True)
         c, s, t, total = loss_calculate(feats, content_target, style_grams, x, masks)
         total.backward()
-        closure.losses = (c.item(), s.item(), t.item())
         return total
     with torch.no_grad():
         x0 = to_norm(gen)
         c0, s0, t0, total0 = loss_calculate(
             get_features(vgg, x0), content_target, style_grams, x0, masks)
     record = [(0, c0.item(), s0.item(), t0.item(), total0.item())]
-    best_gen, best_total = None, float("inf")
-    prev_total, stale, done = 1e6, 0, 0
+    best_gen, best_total = gen.detach().clone(), total0.item()
+    prev_total, stale, done = best_total, 0, 0
     for step in range(1, NUM_ITERS + 1):
         optimizer.step(closure)
         with torch.no_grad():
             gen.clamp_(0, 1)
-        c, s, t = closure.losses
-        total = CONTENT_WEIGHT * c + STYLE_WEIGHT * s + TV_WEIGHT * t
+        with torch.no_grad():
+            x = to_norm(gen * mask + content_pixel * (1 - mask))
+            values = loss_calculate(
+                get_features(vgg, x), content_target, style_grams, x, masks)
+        c, s, t, total = (value.item() for value in values)
         record.append((step, c, s, t, total))
         done = step
 
@@ -233,7 +236,7 @@ def main():
     to_PIL_image(gen).save(os.path.join(out_dir, "result.png"))
     save_loss_csv(record, os.path.join(out_dir, "loss.csv"))
 
-    _, c_l, s_l, t_l, total_l = record[-1]
+    _, c_l, s_l, t_l, total_l = min(record, key=lambda row: row[-1])
     print(f"  完成 {done} 步，内容 {c_l:.4f}  风格 {s_l:.3e}"
             f"tv {t_l:.5f}  总损失 {total_l:.4f}")
     print(f"  用时 {time.time() - t0:.0f} 秒")

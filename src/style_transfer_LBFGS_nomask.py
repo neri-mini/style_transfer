@@ -165,20 +165,24 @@ def transfer(vgg,content,style,snapshot_dir=None,snapshot_steps=None,
         c, s, t, total = loss_calculate(feats,content_target,style_target,x)
         loss = total
         loss.backward()
-        closure.losses = (c.item(), s.item(), t.item(),total.item())
         return loss
     with torch.no_grad():
         x0 = to_norm(gen)
         c0,s0,t0,total0 = loss_calculate(get_features(vgg,x0),content_target,style_target,x0)
     record = [(0,c0.item(),s0.item(),t0.item(),total0.item())]
-    best_gen, best_total, best_step = None, float("inf"), 0
-    prev_total, stale, done = 1e6, 0, 0
+    best_gen, best_total, best_step = gen.detach().clone(), total0.item(), 0
+    prev_total, stale, done = best_total, 0, 0
     
     for step in range(1,NUM_ITERS +1):
         optimizer.step(closure)
         with torch.no_grad():
             gen.clamp_(0, 1)          
-        c,s,t,total = closure.losses
+        # A line search may evaluate rejected trial points. Measure the accepted image.
+        with torch.no_grad():
+            x = to_norm(gen)
+            values = loss_calculate(
+                get_features(vgg, x), content_target, style_target, x)
+        c, s, t, total = (value.item() for value in values)
         record.append((step, c, s, t, total))
         done = step
 

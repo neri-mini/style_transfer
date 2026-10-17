@@ -159,7 +159,6 @@ def transfer(vgg, content, style_grams_list, weights,
             feats, content_target, style_grams_list, x, weights)
         loss = total    
         loss.backward()
-        closure.losses = (c.item(), s1.item(), s2.item(), t.item())
         return loss
 
     with torch.no_grad():
@@ -168,16 +167,18 @@ def transfer(vgg, content, style_grams_list, weights,
             get_features(vgg, x0), content_target, style_grams_list, x0, weights)
     record = [(0, c0.item(), s10.item(), s20.item(), t0.item(), total0.item())]
 
-    best_gen, best_total = None, float("inf")
-    prev_total, stale, done = 1e6, 0, 0
+    best_gen, best_total = gen.detach().clone(), total0.item()
+    prev_total, stale, done = best_total, 0, 0
 
     for step in range(1, NUM_ITERS + 1):
         optimizer.step(closure)
         with torch.no_grad():
             gen.clamp_(0, 1)
-        c, s1, s2, t = closure.losses
-        alpha, beta1, beta2, gamma = weights
-        total = alpha * c + beta1 * s1 + beta2 * s2 + gamma * t
+        with torch.no_grad():
+            x = to_norm(gen)
+            values = loss_calculate(
+                get_features(vgg, x), content_target, style_grams_list, x, weights)
+        c, s1, s2, t, total = (value.item() for value in values)
         record.append((step, c, s1, s2, t, total))
         done = step
 
@@ -237,7 +238,7 @@ def main():
         to_PIL_image(gen).save(os.path.join(out_dir, "result.png"))
         save_loss_csv(record, os.path.join(out_dir, "loss.csv"), weights)
 
-        _, c_l, s1_l, s2_l, _, total = record[-1]
+        _, c_l, s1_l, s2_l, _, total = min(record, key=lambda row: row[-1])
         wc, w1, w2 = CONTENT_WEIGHT * c_l, beta1 * s1_l, beta2 * s2_l
         style_sum = w1 + w2
         summary.append([f"{w_ratio:.2f}", f"{beta1:.4g}", f"{beta2:.4g}",
